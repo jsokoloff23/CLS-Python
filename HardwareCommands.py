@@ -1,4 +1,5 @@
-'''HardwareCommands
+'''
+Last Modified: 6/17/2022
 
 This file contains classes with methods that interact directly with the hardware of the microscope, 
 as well as some properties for said devices. There are two classes:
@@ -11,16 +12,22 @@ Future changes:
   more generically usable. Could be useful in future development of image acquisitions. Would
   also be more true to the nature of MVC.
 
+Notes:
+- I just realized that there's a small, unavoidable timing error when performing a z-stack with 
+  the PLC as the master. For the PLC to run at 30 Hz, it would need to pulse every 33.33 ms, but
+  the PLC has a 4kHz internal clock, which means it can either pulse every 33.25 or 33.50 ms. 
+  Currently, it's set to round up to avoid the camera potentially missing trigger pulses, and so
+  there's an intrinsic .16 ms timing error. This translates to a 4.8 nm error (0.16 ms * 30 um/s), 
+  which is negligable, but I thought it was worth noting just in case something related popped up.
 
 '''
 
 
 import numpy as np
-import PyDAQmx as pydaq
 import nidaqmx
 from nidaqmx.stream_writers import AnalogMultiChannelWriter
-import numpy as np
 from pycromanager import Studio, Core
+
 
 class MMHardwareCommands(object):
     def __init__(self, studio: Studio, core: Core):
@@ -103,7 +110,9 @@ class MMHardwareCommands(object):
         """
         The PLC (programmable logic card) is used to create logic circuits through software.
         The circuit here creates a pulse matching the stage speed and step size during 
-        a z-stack. This pulse is sent to the camera as an external trigger. 
+        a z-stack. This pulse is sent to the camera as an external trigger. If the stage
+        scan speed is set to 0.030 mm/s and the step size is 1um, then the PLC output
+        will pulse at 30 Hz.
 
         For a full realization of this circuit, lease see the developer guide.
         """
@@ -196,6 +205,7 @@ class MMHardwareCommands(object):
         self.set_property(self.plc_name, self.prop_cell_config, 1)
 
     def set_dslm_camera_properties(self, z_scan_speed):
+        #Sets camera properties for a DSLM zstack
         self.studio.live().set_live_mode_on(False)
         exposure = 1.0/z_scan_speed - 3
         self.set_property(self.cam_name, self.sensor_mode_prop, self.default_sensor_mode)
@@ -212,6 +222,9 @@ class MMHardwareCommands(object):
         The sensor mode is set to progressive and we need to set an internal
         line interval. Please read my lightsheet readout mode guide for a 
         full explanation of this mode.
+
+        Essentially, this is the LSRM analog of the set_dslm_camera_properties
+        method.
         """
 
         self.studio.live().set_live_mode_on(False)
@@ -226,6 +239,7 @@ class MMHardwareCommands(object):
         self.core.set_exposure(line_interval * self.lsrm_num_lines)
 
     def set_default_camera_properties(self, exposure):
+        #Sets camera properties to default.
         self.studio.live().set_live_mode_on(False)
         self.set_property(self.cam_name, self.sensor_mode_prop, self.default_sensor_mode)
         self.set_property(self.cam_name, self.trigger_polarity_prop, self.default_trigger_polarity)
@@ -236,9 +250,12 @@ class MMHardwareCommands(object):
         self.core.set_exposure(exposure)
 
     def set_z_stage_speed(self, z_speed):
+        #Sets z-stage speed. Currently used to switch between z-stage speed
+        #when moving to a new position and the speed to use during scans
         self.set_property(self.z_stage_name, self.z_speed_property, z_speed)
 
     def set_xy_stage_speed(self, x_speed, y_speed):
+        #Sets xy-stage speed
         self.set_property(self.xy_stage_name, self.x_speed_property, x_speed)
         self.set_property(self.xy_stage_name, self.y_speed_property, y_speed)
 
@@ -263,6 +280,7 @@ class MMHardwareCommands(object):
         self.set_property(self.tiger, self.serial, scan_r_properties)
 
     def scan_start(self):
+        #Start scan with properties set in scan_setup.
         self.set_property(self.tiger, self.serial, self.scan_start_command)
     
     def move_stage(self, x_position, y_position, z_position):
@@ -284,14 +302,17 @@ class MMHardwareCommands(object):
             self.core.wait_for_device(self.z_stage_name)
 
     def get_x_position(self):
+        #Gets current x-position from xy-stage
         x_pos =  int(np.round(self.core.get_x_position(self.xy_stage_name)))
         return x_pos
 
     def get_y_position(self):
+        #Gets current y-position from xy-stage
         y_pos =  int(np.round(self.core.get_y_position(self.xy_stage_name)))
         return y_pos
 
     def get_z_position(self):
+        #Gets current y-position from z-stage
         z_pos =  int(np.round(self.core.get_position(self.z_stage_name)))
         return z_pos
     
@@ -351,8 +372,7 @@ class SPIMGalvoCommands(object):
         self.lightsheet_readout_framerate = 15
         self.lightsheet_readout_laser_delay = 0.500
         self.lightsheet_readout_cam_delay = 0.
-        self.lightsheet_readout_delay_buffer = 100
-        self.lightsheet_readout_num_samples = 2048 + self.lightsheet_readout_delay_buffer
+        self.lightsheet_readout_num_samples = 2048
         self.lightsheet_readout_sampling_rate = self.lightsheet_readout_num_samples
         self.lightsheet_readout_ili = 1.0/float(self.lightsheet_readout_sampling_rate)
 
@@ -361,19 +381,26 @@ class SPIMGalvoCommands(object):
     def continuous_scan(self):
         self.reset_tasks()
 
+        #Adds analog output channels to scan_output task
         self.scan_output.ao_channels.add_ao_voltage_chan(self.focus_channel)
         self.scan_output.ao_channels.add_ao_voltage_chan(self.offset_channel)
         self.scan_output.timing.cfg_samp_clk_timing(self.continuous_scan_sampling_rate, sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS, samps_per_chan=self.continuous_scan_num_samples)
 
+        #Adds pulse output channel to cam_output task. The pulse output is to relay 
+        #the digital signals from the PLC to the camera.
         self.cam_output.co_channels.add_co_pulse_chan_time(self.pulse_channel, low_time=0.001, high_time=0.001)
         self.cam_output.timing.cfg_implicit_timing(samps_per_chan=1)
         self.cam_output.triggers.start_trigger.cfg_dig_edge_start_trig(self.retrigger_channel)
         self.cam_output.triggers.start_trigger.retriggerable = True
 
+        #Sets scan data as triangle wave. This causes the galvo to scan back
+        #and forth continuously across withe scan_width range, creating the 
+        #time-averaged light sheet.
         scan = np.linspace(-1*self.continuous_scan_width/2, self.continuous_scan_width/2, int(self.continuous_scan_num_samples/2)) + self.continuous_scan_offset
         scan = np.concatenate((scan,scan[::-1]),0)
         focus = self.focus*np.ones(self.continuous_scan_num_samples)
 
+        #Writes analog data to out_stream
         writer = AnalogMultiChannelWriter(self.scan_output.out_stream)
         writer.write_many_sample(np.array([focus, scan]))
 
@@ -383,6 +410,8 @@ class SPIMGalvoCommands(object):
     def continuous_scan_not_scanning(self):
         self.reset_tasks()
 
+        #Same as continuous_scan but without the scanning or pulse channel.
+        #Used to align laser.
         self.scan_output.ao_channels.add_ao_voltage_chan(self.focus_channel)
         self.scan_output.ao_channels.add_ao_voltage_chan(self.offset_channel)
         self.scan_output.timing.cfg_samp_clk_timing(self.continuous_scan_sampling_rate, sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS, samps_per_chan=self.continuous_scan_num_samples)
@@ -394,10 +423,13 @@ class SPIMGalvoCommands(object):
         writer.write_many_sample(np.array([focus, scan]))
 
         self.scan_output.start()
-    
+
     def lightsheet_readout_not_scanning(self):
         self.reset_tasks()
 
+        #Same as continuous_scan_not_scanning but with lightsheet_readout_current_posisition
+        #as offset to y-galvo mirror instead of continuous_scan_offset. Used to set scan bounds
+        #for lsrm.
         self.scan_output.ao_channels.add_ao_voltage_chan(self.focus_channel)
         self.scan_output.ao_channels.add_ao_voltage_chan(self.offset_channel)
         self.scan_output.timing.cfg_samp_clk_timing(self.continuous_scan_sampling_rate, sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS, samps_per_chan=self.continuous_scan_num_samples)
@@ -413,9 +445,16 @@ class SPIMGalvoCommands(object):
     def lightsheet_readout(self):
         self.reset_tasks()
 
+        #Calculates sampling rate and internal line interval (ili) from framerate.
+        #Sampling rate uses framerate+1 to ensure no digital pulses from the PLC
+        #are missed by the camera. If the camera receives a pulse while it is currently
+        #taking an image, it will skip it, halving the framerate.
         self.lightsheet_readout_sampling_rate = self.lightsheet_readout_num_samples * (self.lightsheet_readout_framerate + 1)
         self.lightsheet_readout_ili = 1.0/float(self.lightsheet_readout_sampling_rate)
 
+        #Adds analog output channels to scan_output task. Also creates start trigger and
+        #makes task retriggerable so that PLC pulses trigger it. Also adds delay so that
+        #scan and camera output can be synchronized.
         self.scan_output.ao_channels.add_ao_voltage_chan(self.focus_channel)
         self.scan_output.ao_channels.add_ao_voltage_chan(self.offset_channel)
         self.scan_output.timing.cfg_samp_clk_timing(self.lightsheet_readout_sampling_rate, sample_mode=nidaqmx.constants.AcquisitionType.FINITE, samps_per_chan=self.lightsheet_readout_num_samples)
@@ -424,14 +463,17 @@ class SPIMGalvoCommands(object):
         self.scan_output.triggers.start_trigger.delay_units = nidaqmx.constants.DigitalWidthUnits.SECONDS
         self.scan_output.triggers.start_trigger.delay = self.lightsheet_readout_laser_delay/1000 + 20 * 10**-9
         
+        #Adds channel pulse output to cam_output task. Note that there is also a delay here,
+        #allowing for different delays to be set for the galvos and the camera.
         self.cam_output.co_channels.add_co_pulse_chan_time(self.pulse_channel, initial_delay=self.lightsheet_readout_cam_delay/1000, low_time=.001, high_time=.001).co_enable_initial_delay_on_retrigger = True
         self.cam_output.timing.cfg_implicit_timing(samps_per_chan=1)
         self.cam_output.triggers.start_trigger.cfg_dig_edge_start_trig(self.retrigger_channel)
         self.cam_output.triggers.start_trigger.retriggerable = True
 
-        scan = np.linspace(self.lightsheet_readout_lower, self.lightsheet_readout_upper, self.lightsheet_readout_num_samples-self.lightsheet_readout_delay_buffer)
-        buffer = self.lightsheet_readout_lower * np.ones(self.lightsheet_readout_delay_buffer)
-        scan = np.concatenate((scan, buffer),0)
+        #Buffer is so that 
+        scan = np.linspace(self.lightsheet_readout_lower, self.lightsheet_readout_upper, self.lightsheet_readout_num_samples)
+        #buffer = self.lightsheet_readout_lower * np.ones(self.lightsheet_readout_delay_buffer)
+        #scan = np.concatenate((scan, buffer),0)
         focus = self.focus * np.ones(self.lightsheet_readout_num_samples)
 
         writer = AnalogMultiChannelWriter(self.scan_output.out_stream)
@@ -455,7 +497,3 @@ class SPIMGalvoCommands(object):
         self.scan_output.close()
         self.cam_output.close()
     
-    
-
-
-

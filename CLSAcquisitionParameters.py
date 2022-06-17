@@ -86,6 +86,6 @@ class RegionSettings(object):
         self.snap_channel_list = []
         
         self.video_boolean = False
-        self.video_duration_in_seconds = 5
+        self.video_duration = 5
         self.video_exposure_time = 20
         self.video_channel_list = []

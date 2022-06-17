@@ -1,5 +1,5 @@
 """
-Last Modified: 4/12/2022
+Last Modified: 6/17/2022
 
 This file contains all the controller classes. There are three, one for each of the main GUI elements.
 
@@ -34,12 +34,12 @@ from pathlib import Path
 import configparser
 import os
 import copy
+from pycromanager import Studio, Core
 from PyQt5 import QtCore, QtGui, QtWidgets
 import QtDesignerGUI
 import CLSAcquisitionParameters
 import HardwareCommands
 from CLSAcquisition import Acquisition
-from pycromanager import Studio, Core
 
 
 class MainController(object):
@@ -50,7 +50,7 @@ class MainController(object):
 
     def __init__(self, studio: Studio, core: Core):
         self.main_window = QtDesignerGUI.MainWindow()
-        MainController.config = MainController.initialize_config_file()
+        MainController.config = MainController.initialize_config()
 
         self.studio = studio
         self.core = core
@@ -80,73 +80,12 @@ class MainController(object):
         self.spim_commands.exit()
         quit()
     
-    def initialize_config_file():
+    def initialize_config():
         config = configparser.RawConfigParser()
         if os.path.exists(MainController.config_file_name):
             config.read(MainController.config_file_name)
 
         return config
-
-    def read_from_config():
-        config = configparser.RawConfigParser()
-        try:
-            config.read('CLSCongif.cfg')
-            return config
-        except:
-            print("couldn't read config file")
-            return
-        try:
-            section = 'Acquisition Settings'
-            settings = self.cls_controller.acquisition_settings
-            settings.time_points_boolean = config.getboolean(section, 'time_bool')
-            settings.time_points_interval = config.getint(section, 'time_int')
-            settings.num_time_points = config.getint(section, 'num_time')
-            settings.z_scan_speed = config.getfloat(section, 'scan_speed')
-            settings.lightsheet_mode_boolean = config.getboolean(section, 'lsrm_bool')
-        except:
-            print('No Acquisition Settings Section')
-
-        for sample_index in range(self.cls_controller.acquisition_settings.sample_dimension):
-            for region_index in range(self.cls_controller.acquisition_settings.region_dimension):
-                try:
-                    section = 'Sample ' + str(sample_index) + ' Region ' + str(region_index)
-                    region = CLSAcquisitionParameters.RegionSettings()
-                    region.x_position = config.getint(section, 'x_pos')
-                    region.y_position = config.getint(section, 'y_pos')
-                    region.z_position = config.getint(section, 'z_pos')
-                    region.z_stack_boolean = config.getboolean(section, 'z_bool')
-                    region.z_start_position = config.getint(section, 'z_start')
-                    region.z_end_position = config.getint(section, 'z_end')
-                    region.step_size = config.getint(section, 'step')
-                    region.snap_boolean = config.getboolean(section, 'snap_bool')
-                    region.snap_exposure_time = config.getint(section, 'snap_exp')
-                    region.video_boolean = config.getboolean(section, 'video_bool')
-                    region.video_duration_in_seconds = config.getint(section, 'video_dur')
-                    region.video_exposure_time = config.getint(section, 'video_exp')
-                    settings.region_settings_list[sample_index][region_index] = region
-                    if sample_index == region_index == 0:
-                        self.cls_controller.region_settings = region
-                    print('Region read at sample index ' + str(sample_index) + ', region index ' + str(region_index))
-                except:
-                    None
-        
-        try:
-            section = 'SPIM Galvo Settings'
-            spim = self.spim_commands
-            spim.focus = config.getfloat(section, 'focus')
-            spim.continuous_scan_offset = config.getfloat(section, 'cont_offset')
-            spim.continuous_scan_width = config.getfloat(section, 'widtj')
-            spim.ligthsheet_readout_current_position = config.getfloat(section, 'lsrm_pos')
-            spim.lightsheet_readout_upper = config.getfloat(section, 'lsrm_upper')
-            spim.lightsheet_readout_lower = config.getfloat(section, 'lsrm_lower')
-            spim.lightsheet_readout_framerate = config.getfloat(section, 'framerate')
-            spim.lightsheet_readout_laser_delay = config.getfloat(section, 'laser_delay')
-            spim.lightsheet_readout_cam_delay = config.getfloat(section, 'cam_delay')
-        except:
-            'No SPIM Galvo Settings Section'
-
-
-
 
 class CLSController(object):
     """Future Changes:
@@ -299,8 +238,15 @@ class CLSController(object):
 
         self.initialize_from_config()
 
+    #Writes settings to config file
     def write_to_config(self):
         config = MainController.config
+
+        section = 'COMMENTS'
+        if not config.has_section(section):
+            config.add_section(section)
+        config.set(section, 'COMMENTS', 'PLEASE DO NOT EDIT UNLESS YOU KNOW WHAT YOU ARE DOING')
+
         section = MainController.acquisition_settings_section
         if not config.has_section(section):
             config.add_section(section)
@@ -327,18 +273,24 @@ class CLSController(object):
                     config.set(section, 'z_start', str(region.z_start_position))
                     config.set(section, 'z_end', str(region.z_end_position))
                     config.set(section, 'step', str(region.step_size))
+                    config.set(section, 'z_stack_channels', ",".join(region.z_stack_channel_list))
                     config.set(section, 'snap_bool', str(region.snap_boolean))
                     config.set(section, 'snap_exp', str(region.snap_exposure_time))
+                    config.set(section, 'snap_channels', ",".join(region.snap_channel_list))
                     config.set(section, 'video_bool', str(region.video_boolean))
-                    config.set(section, 'video_dur', str(region.video_duration_in_seconds))
+                    config.set(section, 'video_dur', str(region.video_duration))
                     config.set(section, 'video_exp', str(region.video_exposure_time))
+                    config.set(section, 'video_channels', ",".join(region.video_channel_list))
 
         with open(MainController.config_file_name, 'w') as configfile:
             config.write(configfile)
-        
+    
+    #Reads values from config file and initializes GUI based on it
     def initialize_from_config(self):
         config = MainController.config
         section = MainController.acquisition_settings_section
+
+        #Gets values from config
         if config.has_section(section):
             try:
                 self.acquisition_settings.time_points_boolean = config.getboolean(section, 'time_bool')
@@ -349,7 +301,7 @@ class CLSController(object):
             except:
                 print('section line missing')
         
-        #Initialize gui elements based on config file
+        #Sets acquisition settings dialog states
         self.acquisition_settings_dialog.time_points_check_box.setChecked(self.acquisition_settings.time_points_boolean)
         self.acquisition_settings_dialog.num_time_points_line_edit.setEnabled(self.acquisition_settings.time_points_boolean)
         self.acquisition_settings_dialog.time_points_interval_line_edit.setEnabled(self.acquisition_settings.time_points_boolean)
@@ -363,6 +315,7 @@ class CLSController(object):
         if self.acquisition_settings.z_scan_speed == 0.030:
             self.acquisition_settings_dialog.stage_speed_combo_box.setCurrentText('30 um/s')
 
+        #initializes regions from config file
         for sample_index in range(self.acquisition_settings.sample_dimension):
             for region_index in range(self.acquisition_settings.region_dimension):
                 section = 'Sample ' + str(sample_index) + ' Region ' + str(region_index)
@@ -376,11 +329,14 @@ class CLSController(object):
                         region.z_start_position = config.getint(section, 'z_start')
                         region.z_end_position = config.getint(section, 'z_end')
                         region.step_size = config.getint(section, 'step')
+                        region.z_stack_channel_list = config.get(section, 'z_stack_channels').split(',')
                         region.snap_boolean = config.getboolean(section, 'snap_bool')
                         region.snap_exposure_time = config.getint(section, 'snap_exp')
+                        region.snap_channel_list = config.get(section, 'snap_channels').split(',')
                         region.video_boolean = config.getboolean(section, 'video_bool')
-                        region.video_duration_in_seconds = config.getint(section, 'video_dur')
+                        region.video_duration = config.getint(section, 'video_dur')
                         region.video_exposure_time = config.getint(section, 'video_exp')
+                        region.video_channel_list = config.get(section, 'video_channels').split(',')
                         self.acquisition_settings.region_settings_list[sample_index][region_index] = region
 
                         if sample_index == region_index == 0:
@@ -389,7 +345,7 @@ class CLSController(object):
                     except:
                         'section line missing'
 
-        #Initialize gui elements baseed on config file
+        #Initialize gui elements baseed on regions
         initial_bool = self.acquisition_settings.region_settings_list[0][0] != 0
         self.cls_dialog.go_to_button.setEnabled(initial_bool)
         self.cls_dialog.remove_region_button.setEnabled(initial_bool)
@@ -402,8 +358,8 @@ class CLSController(object):
         self.update_cls_dialog()
 
     def update_cls_dialog(self):
-        # Updates all the GUI elements (apart from the table) to reflect the
-        # values in the current region_settings instance.
+        #Updates all the GUI elements (apart from the table) to reflect the
+        #values in the current region_settings instance.
 
         self.cls_dialog.sample_label.setText("Sample " + str(self.sample_num + 1))
         self.cls_dialog.region_label.setText("Region " + str(self.region_num + 1))
@@ -441,9 +397,10 @@ class CLSController(object):
 
         self.cls_dialog.snap_exposure_line_edit.setText(str(self.region_settings.snap_exposure_time))
 
-        self.cls_dialog.video_duration_line_edit.setText(str(self.region_settings.video_duration_in_seconds))
+        self.cls_dialog.video_duration_line_edit.setText(str(self.region_settings.video_duration))
         self.cls_dialog.video_exposure_line_edit.setText(str(self.region_settings.video_exposure_time))
 
+        #Sets the model list to reflect channel list in current region_settings instance
         self.z_stack_used_model.clear()
         for channel in self.region_settings.z_stack_channel_list:
             item = QtGui.QStandardItem(channel)
@@ -494,6 +451,8 @@ class CLSController(object):
                    "dur", "exp", "chans", "# images"]
         self.region_table_model.setHorizontalHeaderLabels(headers)
 
+        #Iterates through region_settings_list. If region is initialized, puts
+        #region into the table.
         for sample_index in range(self.acquisition_settings.sample_dimension):
             for region_index in range(self.acquisition_settings.region_dimension):
                 region = self.acquisition_settings.region_settings_list[sample_index][region_index]
@@ -502,13 +461,13 @@ class CLSController(object):
                     num_snap_images = 0
                     num_video_images = 0
                     if region.z_stack_boolean:
-                        num_z_stack_images = len(region.z_stack_channel_list) * np.round(
-                            np.abs(region.z_start_position - region.z_end_position))
+                        num_z_stack_images = len(region.z_stack_channel_list) * int(
+                            np.abs(float(region.z_start_position - region.z_end_position)) / region.step_size)
                     if region.snap_boolean:
                         num_snap_images = len(region.snap_channel_list)
                     if region.video_boolean:
                         num_video_images = len(region.video_channel_list) * int(
-                            np.round(1000 / region.video_exposure_time * region.video_duration_in_seconds))
+                            np.round(1000 / region.video_exposure_time * region.video_duration))
                     total_images = num_z_stack_images + num_video_images + num_snap_images
 
                     row_list = [str(sample_index + 1),
@@ -525,7 +484,7 @@ class CLSController(object):
                                 str(self.region_settings.snap_exposure_time),
                                 ','.join(region.snap_channel_list),
                                 str(region.video_boolean),
-                                str(region.video_duration_in_seconds),
+                                str(region.video_duration),
                                 str(region.video_exposure_time),
                                 ','.join(region.video_channel_list),
                                 str(total_images)]
@@ -539,6 +498,8 @@ class CLSController(object):
         self.cls_dialog.region_table_view.resizeColumnsToContents()
 
     def calculate_num_images(self):
+        #Calculates number of images in acquisition for use in acquisition settings dialog
+
         if self.acquisition_settings.time_points_boolean:
             total_images = self.num_images_per * self.acquisition_settings.num_time_points
             self.acquisition_settings_dialog.total_images_line_edit.setText(str(total_images))
@@ -550,6 +511,8 @@ class CLSController(object):
             self.acquisition_settings_dialog.memory_line_edit.setText(("%.3f" % memory))
 
     def go_to_button_clicked(self):
+        #Goes to position set in current instance of RegionSettings
+         
         x_pos = self.region_settings.x_position
         y_pos = self.region_settings.y_position
         z_pos = self.region_settings.z_position
@@ -558,7 +521,7 @@ class CLSController(object):
 
     def set_region_button_clicked(self):
         # Gets current stage position and creates element of region_settings_list
-        # with current settings in GUI. Currently, this method and the pastRegionButton
+        # with current settings in GUI. Currently, this method and the paste_regionButton
         # are the only ways to initialize an element in the region_settings_list.
 
         x_pos = self.mm_hardware_commands.get_x_position()
@@ -570,6 +533,7 @@ class CLSController(object):
         self.region_settings.z_position = z_pos
         self.acquisition_settings.update_region_settings_list(self.region_settings, self.sample_num, self.region_num)
 
+        #Once region is initialized, the next region can be set
         self.cls_dialog.next_region_button.setEnabled(True)
         self.cls_dialog.next_sample_button.setEnabled(True)
         self.cls_dialog.remove_region_button.setEnabled(True)
@@ -716,6 +680,7 @@ class CLSController(object):
         self.write_to_config()
 
     def acquisition_setup_button_clicked(self):
+        #Pulls up acquisition settings dialog
         self.acquisition_settings_dialog.show()
         self.acquisition_settings_dialog.activateWindow()
 
@@ -781,6 +746,7 @@ class CLSController(object):
             return 'not a number'
 
         self.set_table()
+        self.write_to_config()
 
     def z_line_edit_event(self):
         try:
@@ -829,7 +795,7 @@ class CLSController(object):
 
     def video_duration_line_edit_event(self):
         try:
-            self.region_settings.video_duration_in_seconds = int(self.cls_dialog.video_duration_line_edit.text())
+            self.region_settings.video_duration = int(self.cls_dialog.video_duration_line_edit.text())
         except ValueError:
             return 'not a number'
 
@@ -846,7 +812,7 @@ class CLSController(object):
         self.write_to_config()
 
     def z_stack_available_list_move(self):
-        #on double click, switches channel fro, available list to used list
+        #on double click, switches channel from available list to used list
         channel_index = self.cls_dialog.z_stack_available_list_view.selectedIndexes()[0].row()
         channel = self.z_stack_available_model.item(channel_index).text()
         self.z_stack_available_model.removeRow(channel_index)
@@ -856,6 +822,7 @@ class CLSController(object):
         self.region_settings.z_stack_channel_list.append(channel)
 
         self.set_table()
+        self.write_to_config()
 
     def snap_available_list_move(self):
         channel_index = self.cls_dialog.snap_available_list_view.selectedIndexes()[0].row()
@@ -867,6 +834,7 @@ class CLSController(object):
         self.region_settings.snap_channel_list.append(channel)
 
         self.set_table()
+        self.write_to_config()
 
     def video_available_list_move(self):
         channel_index = self.cls_dialog.video_available_list_view.selectedIndexes()[0].row()
@@ -878,8 +846,10 @@ class CLSController(object):
         self.region_settings.video_channel_list.append(channel)
 
         self.set_table()
+        self.write_to_config()
 
     def z_stack_used_list_move(self):
+        #Same as available_list_move except from used list to available list
         channel_index = self.cls_dialog.z_stack_used_list_view.selectedIndexes()[0].row()
         channel = self.z_stack_used_model.item(channel_index).text()
         self.z_stack_used_model.removeRow(channel_index)
@@ -889,6 +859,7 @@ class CLSController(object):
         self.z_stack_available_model.appendRow(item)
 
         self.set_table()
+        self.write_to_config()
 
     def snap_used_list_move(self):
         channel_index = self.cls_dialog.snap_used_list_view.selectedIndexes()[0].row()
@@ -900,6 +871,7 @@ class CLSController(object):
         self.snap_available_model.appendRow(item)
 
         self.set_table()
+        self.write_to_config()
 
     def video_used_list_move(self):
         channel_index = self.cls_dialog.video_used_list_view.selectedIndexes()[0].row()
@@ -911,8 +883,10 @@ class CLSController(object):
         self.video_available_model.appendRow(item)
 
         self.set_table()
+        self.write_to_config()
 
     def browse_button_clicked(self):
+        #Choose save location. Acquisition button is only enabled after setting save location.
         browse = QtDesignerGUI.browseDialog()
         path = str(browse.getExistingDirectory(browse, 'Select Directory', self.start_path))
         self.acquisition_settings_dialog.save_location_line_edit.setText(path)
@@ -923,6 +897,8 @@ class CLSController(object):
             self.acquisition_settings_dialog.start_acquisition_button.setEnabled(True)
 
     def channel_move_up_button_clicked(self):
+        #Moves channel one index lower in channel_order_list. The channel_order_list
+        #determines the channel order in which an acquisition is performed.
         channel_index = self.acquisition_settings_dialog.channel_order_list_view.selectedIndexes()[0].row()
         if channel_index > 0:
             channel = self.channel_order_model.takeRow(channel_index)
@@ -936,6 +912,7 @@ class CLSController(object):
                 self.acquisition_settings.channel_order_list.append(item)
 
     def channel_move_down_button_clicked(self):
+        #Same as move_up_button but moves up one index.
         channel_index = self.acquisition_settings_dialog.channel_order_list_view.selectedIndexes()[0].row()
         if channel_index < self.channel_order_model.rowCount() - 1:
             channel = self.channel_order_model.takeRow(channel_index)
@@ -949,12 +926,14 @@ class CLSController(object):
                 self.acquisition_settings.channel_order_list.append(item)
 
     def start_acquisition_button_clicked(self):
+        #Starts acquisition with current acquisition_settings.
         acquisition = Acquisition(self.studio, self.core, self.acquisition_dialog, self.acquisition_settings,
                                   self.mm_hardware_commands, self.spim_commands)
         self.acquisition_settings_dialog.start_acquisition_button.setEnabled(False)
         acquisition.start()
 
     def time_points_check_clicked(self):
+        #Sets state of time_points GUI elements to match state of checkbox
         time_points_boolean = self.acquisition_settings_dialog.time_points_check_box.isChecked()
         self.acquisition_settings.time_points_boolean = time_points_boolean
         self.acquisition_settings_dialog.num_time_points_line_edit.setEnabled(time_points_boolean)
@@ -962,9 +941,11 @@ class CLSController(object):
         self.calculate_num_images()
 
     def lsrm_check_clicked(self):
+        #Enables LSRM in acquisition
         self.acquisition_settings.lightsheet_mode_boolean = self.acquisition_settings_dialog.lsrm_check_box.isChecked()
 
     def stage_speed_combo_box_clicked(self):
+        #Sets stage speed for use in z-stacks in acquisition
         if self.acquisition_settings_dialog.stage_speed_combo_box.currentText() == '30 um/s':
             self.acquisition_settings.z_scan_speed = 0.030
 
@@ -972,6 +953,7 @@ class CLSController(object):
             self.acquisition_settings.z_scan_speed = 0.015
 
     def num_time_points_line_edit_event(self):
+        #Sets number of time points
         try:
             self.acquisition_settings.num_time_points = int(self.acquisition_settings_dialog.num_time_points_line_edit.text())
             self.calculate_num_images()
@@ -980,6 +962,7 @@ class CLSController(object):
             return 'not a number'
 
     def time_points_interval_line_edit_event(self):
+        #Sets interval between time points
         try:
             self.acquisition_settings.time_points_interval = int(self.acquisition_settings_dialog.time_points_interval_line_edit.text())
         except ValueError:
@@ -1021,13 +1004,14 @@ class SPIMController(object):
         self.mm_hardware_commands = mm_hardware_commands
         self.spim_commands = spim_commands
         self.mm_hardware_commands.set_default_camera_properties(self.mm_hardware_commands.default_exposure)
-        self.spim_commands.continuous_scan_not_scanning()
 
         # sets step sizes for spimGalvo buttons and min/max values to prevent
         # setting voltage too high. Could be changed, as a 2 volt max in either
         # direction is probably a bit low. Could be changed to +-3 or 4.
-        self.small_step = 0.01
-        self.big_step = 0.1
+        self.offset_small_step = 0.01
+        self.offset_big_step = 0.1
+        self.focus_small_step = 0.001
+        self.focus_big_step = 0.01
         self.delay_step = .01
 
         self.galvo_min = -4.0
@@ -1100,8 +1084,10 @@ class SPIMController(object):
         self.spim_dialog.scanning_check_box.stateChanged.connect(self.scanning_check_box_stage_changed)
 
         self.initialize_from_config()
+        self.spim_commands.continuous_scan_not_scanning()
 
     def write_to_config(self):
+        #Writes current settings to config file
         config = MainController.config
         section = MainController.spim_galvo_section
         if not config.has_section(section):
@@ -1121,6 +1107,7 @@ class SPIMController(object):
             config.write(configfile)
 
     def initialize_from_config(self):
+        #Initializes values of dialog from config file
         config = MainController.config
         section = MainController.spim_galvo_section
 
@@ -1194,6 +1181,7 @@ class SPIMController(object):
         self.studio.live().set_live_mode_on(True)
 
     def scanning_check_box_stage_changed(self):
+        #Causes the laser to scan
         self.set_scanning_mode()
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Lightsheet Readout Mode':
             if self.spim_dialog.scanning_check_box.isChecked():
@@ -1205,6 +1193,8 @@ class SPIMController(object):
         self.studio.live().set_live_mode_on(True)
 
     def offset_big_neg_button_clicked(self):
+        #Changes offset of scanning galvo mirror
+
         #Since offset line edit acts as both offset for continuous_scan and
         #current position for lsrm, some extra logic is needed to ensure it's
         #changing the correct attributes.
@@ -1213,12 +1203,12 @@ class SPIMController(object):
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Lightsheet Readout Mode':
             offset = self.spim_commands.ligthsheet_readout_current_position
-            offset = max(offset - self.big_step, self.galvo_min)
+            offset = max(offset - self.offset_big_step, self.galvo_min)
             self.spim_commands.ligthsheet_readout_current_position = offset
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Normal DLSM':
             offset = self.spim_commands.continuous_scan_offset
-            offset = max(offset - self.big_step, self.galvo_min)
+            offset = max(offset - self.offset_big_step, self.galvo_min)
             self.spim_commands.continuous_scan_offset = offset
 
         self.spim_dialog.offset_line_edit.setText("%.3f" % offset)
@@ -1231,12 +1221,12 @@ class SPIMController(object):
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Lightsheet Readout Mode':
             offset = self.spim_commands.ligthsheet_readout_current_position
-            offset = max(offset - self.small_step, self.galvo_min)
+            offset = max(offset - self.offset_small_step, self.galvo_min)
             self.spim_commands.ligthsheet_readout_current_position = offset
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Normal DLSM':
             offset = self.spim_commands.continuous_scan_offset
-            offset = max(offset - self.small_step, self.galvo_min)
+            offset = max(offset - self.offset_small_step, self.galvo_min)
             self.spim_commands.continuous_scan_offset = offset
 
         self.spim_dialog.offset_line_edit.setText("%.3f" % offset)
@@ -1249,12 +1239,12 @@ class SPIMController(object):
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Lightsheet Readout Mode':
             offset = self.spim_commands.ligthsheet_readout_current_position
-            offset = min(offset + self.small_step, self.galvo_max)
+            offset = min(offset + self.offset_small_step, self.galvo_max)
             self.spim_commands.ligthsheet_readout_current_position = offset
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Normal DLSM':
             offset = self.spim_commands.continuous_scan_offset
-            offset = min(offset + self.small_step, self.galvo_max)
+            offset = min(offset + self.offset_small_step, self.galvo_max)
             self.spim_commands.continuous_scan_offset = offset
 
         self.spim_dialog.offset_line_edit.setText("%.3f" % offset)
@@ -1267,12 +1257,12 @@ class SPIMController(object):
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Lightsheet Readout Mode':
             offset = self.spim_commands.ligthsheet_readout_current_position
-            offset = min(offset + self.big_step, self.galvo_max)
+            offset = min(offset + self.offset_big_step, self.galvo_max)
             self.spim_commands.ligthsheet_readout_current_position = offset
 
         if self.spim_dialog.scanning_mode_combo_box.currentText() == 'Normal DLSM':
             offset = self.spim_commands.continuous_scan_offset
-            offset = min(offset + self.big_step, self.galvo_max)
+            offset = min(offset + self.offset_big_step, self.galvo_max)
             self.spim_commands.continuous_scan_offset = offset
 
         self.spim_dialog.offset_line_edit.setText("%.3f" % offset)
@@ -1281,8 +1271,9 @@ class SPIMController(object):
         self.write_to_config()
 
     def focus_big_neg_button_clicked(self):
+        #Changes position of x-galvo mirror
         focus = self.spim_commands.focus
-        focus = max(focus - self.big_step, self.galvo_min)
+        focus = max(focus - self.focus_big_step, self.galvo_min)
 
         self.spim_commands.focus = focus
         self.spim_dialog.focus_line_edit.setText("%.3f" % focus)
@@ -1292,7 +1283,7 @@ class SPIMController(object):
 
     def focus_small_neg_button_clicked(self):
         focus = self.spim_commands.focus
-        focus = max(focus - self.small_step, self.galvo_min)
+        focus = max(focus - self.focus_small_step, self.galvo_min)
 
         self.spim_commands.focus = focus
         self.spim_dialog.focus_line_edit.setText("%.3f" % focus)
@@ -1302,7 +1293,7 @@ class SPIMController(object):
 
     def focus_small_pos_button_clicked(self):
         focus = self.spim_commands.focus
-        focus = min(focus + self.small_step, self.galvo_max)
+        focus = min(focus + self.focus_small_step, self.galvo_max)
 
         self.spim_commands.focus = focus
         self.spim_dialog.focus_line_edit.setText("%.3f" % focus)
@@ -1312,7 +1303,7 @@ class SPIMController(object):
 
     def focus_big_pos_button_clicked(self):
         focus = self.spim_commands.focus
-        focus = min(focus + self.big_step, self.galvo_max)
+        focus = min(focus + self.focus_big_step, self.galvo_max)
 
         self.spim_commands.focus = focus
         self.spim_dialog.focus_line_edit.setText("%.3f" % focus)
@@ -1321,8 +1312,10 @@ class SPIMController(object):
         self.write_to_config()
 
     def width_big_neg_button_clicked(self):
+        #Changes scanning range of galvo. Currently, 1.000mV scans
+        #the entire camera field.
         width = self.spim_commands.continuous_scan_width
-        width = max(width - self.big_step, self.width_min)
+        width = max(width - self.offset_big_step, self.width_min)
 
         self.spim_commands.continuous_scan_width = width
         self.spim_dialog.width_line_edit.setText("%.3f" % width)
@@ -1332,7 +1325,7 @@ class SPIMController(object):
 
     def width_small_neg_button_clicked(self):
         width = self.spim_commands.continuous_scan_width
-        width = max(width - self.small_step, self.width_min)
+        width = max(width - self.offset_small_step, self.width_min)
 
         self.spim_commands.continuous_scan_width = width
         self.spim_dialog.width_line_edit.setText("%.3f" % width)
@@ -1342,7 +1335,7 @@ class SPIMController(object):
 
     def width_small_pos_button_clicked(self):
         width = self.spim_commands.continuous_scan_width
-        width = min(width + self.small_step, self.width_max)
+        width = min(width + self.offset_small_step, self.width_max)
 
         self.spim_commands.continuous_scan_width = width
         self.spim_dialog.width_line_edit.setText("%.3f" % width)
@@ -1352,7 +1345,7 @@ class SPIMController(object):
 
     def width_big_pos_button_clicked(self):
         width = self.spim_commands.continuous_scan_width
-        width = min(width + self.big_step, self.width_max)
+        width = min(width + self.offset_big_step, self.width_max)
 
         self.spim_commands.continuous_scan_width = width
         self.spim_dialog.width_line_edit.setText("%.3f" % width)
@@ -1361,24 +1354,27 @@ class SPIMController(object):
         self.write_to_config()
 
     def set_lower_limit_button_clicked(self):
+        #Sets lower limit of LSRM. Worth noting that this should be set when the laser is at the top
+        #of the screen. It just turns out that negative offset makes the galvo mirror move upwards.
         current_position = float(self.spim_commands.ligthsheet_readout_current_position)
-        if current_position <= 0:
-            self.spim_commands.lightsheet_readout_lower = current_position
-            self.spim_dialog.lsrm_lower_line_edit.setText("%.3f" % current_position)
+        self.spim_commands.lightsheet_readout_lower = current_position
+        self.spim_dialog.lsrm_lower_line_edit.setText("%.3f" % current_position)
 
         self.set_scanning_mode()
         self.write_to_config()
 
     def set_upper_limit_button_clicked(self):
+        #Same as lower_limit but for upper limit. Value of upper limit should be greater than lower limit.
         current_position = float(self.spim_commands.ligthsheet_readout_current_position)
-        if current_position >= 0:
-            self.spim_commands.lightsheet_readout_upper = current_position
-            self.spim_dialog.lsrm_upper_line_edit.setText("%.3f" % current_position)
+        self.spim_commands.lightsheet_readout_upper = current_position
+        self.spim_dialog.lsrm_upper_line_edit.setText("%.3f" % current_position)
 
         self.set_scanning_mode()
         self.write_to_config()
 
     def framerate_neg_button_clicked(self):
+        #Changes framerate of LSRM
+
         #framerate change changes ili, and so both plc and camera must also be updated
         framerate = self.spim_commands.lightsheet_readout_framerate
         framerate = max(framerate - 1, self.framerate_min)
@@ -1408,7 +1404,8 @@ class SPIMController(object):
 
         self.write_to_config()
 
-    def cam_delay_neg_button_clicked(self):     
+    def cam_delay_neg_button_clicked(self):
+        #Changes camera delay. Delay is set in ms in the SpimGalvoCommands class.     
         cam_delay = self.spim_commands.lightsheet_readout_cam_delay
         cam_delay = max(cam_delay - self.delay_step, self.delay_min)
 
@@ -1429,6 +1426,7 @@ class SPIMController(object):
         self.write_to_config()
 
     def laser_delay_neg_button_clicked(self):
+        #Changes laser delay. Delay is set in ms in the SpimGalvoCommands class.   
         laser_delay = self.spim_commands.lightsheet_readout_laser_delay
         laser_delay = max(laser_delay - self.delay_step, self.delay_min)
 
